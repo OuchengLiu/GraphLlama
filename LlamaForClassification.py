@@ -207,9 +207,9 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
 
     # 根据输入参数选择索引
     if dataset_type == 'train':
-        idxs = split_idx['train'][:30]
+        idxs = split_idx['train']
     elif dataset_type == 'valid':
-        idxs = split_idx['valid'][:30]
+        idxs = split_idx['valid']
     elif dataset_type == 'test':
         idxs = split_idx['test']
     else:
@@ -249,19 +249,16 @@ def main():
     extract_embedding = llama2_model.get_input_embeddings()
 
     # 使用函数生成数据
-    # embs_path = 'Data/x_embs.pt'
-    # train_top_k_neighbors_path = 'Data/train_top_k_neighbors.json'
-    # valid_top_k_neighbors_path = 'Data/valid_top_k_neighbors.json'
-    embs_path = '/content/drive/My Drive/Colab Notebooks/GraphLLM/Data/ogbn-arxiv/all-roberta-large-v1/main/cached_embs/x_embs.pt'
-    train_top_k_neighbors_path = '/content/drive/My Drive/Colab Notebooks/GraphLLM/Data/ogbn-arxiv/all-roberta-large-v1/main/cached_embs/train_top_k_neighbors.json'
-    valid_top_k_neighbors_path = '/content/drive/My Drive/Colab Notebooks/GraphLLM/Data/ogbn-arxiv/all-roberta-large-v1/main/cached_embs/valid_top_k_neighbors.json'
+    embs_path = 'Data/x_embs.pt'
+    train_top_k_neighbors_path = 'Data/train_top_k_neighbors.json'
+    valid_top_k_neighbors_path = 'Data/valid_top_k_neighbors.json'
 
     train_data = load_data(embs_path, train_top_k_neighbors_path, 'train')
     valid_data = load_data(embs_path, valid_top_k_neighbors_path, 'valid')
     #test_data = load_data(embs_path, 'test_top_k_neighbors.pt', 'test')
 
     train_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                      for node in tqdm(train_data[:30], desc='Processing Train Instructions')]
+                      for node in tqdm(train_data, desc='Processing Train Instructions')]
     # 存储为 .pt 文件
     # torch.save(train_instructions, 'Instruction/train_instructions.pt')
     # # 存储为 .json 文件
@@ -269,7 +266,7 @@ def main():
     #     json.dump(train_instructions, json_file, indent=4)
 
     valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                           for node in tqdm(valid_data[:30], desc='Processing Validation Instructions')]
+                           for node in tqdm(valid_data, desc='Processing Validation Instructions')]
     # 存储为 .pt 文件
     # torch.save(valid_instructions, 'Instruction/train_instructions.pt')
     # # 存储为 .json 文件
@@ -336,5 +333,5 @@ def main():
     metrics=trainer.evaluate()
     print(metrics)
 
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()
