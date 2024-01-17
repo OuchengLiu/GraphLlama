@@ -1,0 +1,1 @@
+Download the SimTeG's generated embeddings from https://huggingface.co/datasets/vermouthdky/SimTeG/blob/main/ogbn-arxiv/all-roberta-large-v1/main/cached_embs/x_embs.pt, and put it in this folder.
