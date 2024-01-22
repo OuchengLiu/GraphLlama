@@ -232,11 +232,11 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
 
     # 根据输入参数选择索引
     if dataset_type == 'train':
-        idxs = split_idx['train'][:12000]
+        idxs = split_idx['train']
     elif dataset_type == 'valid':
-        idxs = split_idx['valid'][:3000]
+        idxs = split_idx['valid']
     elif dataset_type == 'test':
-        idxs = split_idx['test'][:3000]
+        idxs = split_idx['test']
     else:
         raise ValueError("Invalid dataset type. Choose 'train', 'valid', or 'test'.")
 
@@ -300,7 +300,7 @@ def main():
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
         train_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                  for node in tqdm(train_data[:12000], desc='Processing Train Instructions')]
+                  for node in tqdm(train_data, desc='Processing Train Instructions')]
         torch.save(train_instructions, "Instruction/train_instructions.pt")
 
     try:
@@ -309,7 +309,7 @@ def main():
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
         valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                  for node in tqdm(valid_data[:3000], desc='Processing Validation Instructions')]
+                  for node in tqdm(valid_data, desc='Processing Validation Instructions')]
         torch.save(valid_instructions, "Instruction/valid_instructions.pt")
 
 
