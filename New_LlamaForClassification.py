@@ -84,6 +84,7 @@ class CustomDataset(Dataset2):
     def __init__(self, embeds, labels):
         self.embeds = embeds.squeeze(1).to(torch.bfloat16)
         self.labels = torch.tensor(labels).unsqueeze(1)
+        self.attention_mask = create_attention_mask(self.embeds)
 
     def __len__(self):
         return len(self.embeds)
