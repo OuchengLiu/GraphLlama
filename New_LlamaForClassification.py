@@ -90,7 +90,6 @@ class CustomDataset(Dataset2):
         return len(self.embeds)
 
     def __getitem__(self, idx):
-        print(self.attention_mask[idx])
         item = {"inputs_embeds": self.embeds[idx], "labels": self.labels[idx], "attention_mask": self.attention_mask[idx]}
         return item
 
