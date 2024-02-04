@@ -14,31 +14,31 @@ from torch.utils.data import Dataset as Dataset2
 from torch.nn import CrossEntropyLoss
 
 from transformers import TrainingArguments, Trainer
-from transformers import BitsAndBytesConfig, HfArgumentParser, TrainingArguments
+from transformers import BitsAndBytesConfig, TrainingArguments
 from transformers import AutoTokenizer , AutoConfig, AutoModelForSequenceClassification
 
 from typing import Optional
 from peft import LoraConfig
 from dataclasses import dataclass, field
-from datasets import load_dataset, Dataset, DatasetDict
+# from datasets import load_dataset, Dataset, DatasetDict
 
 from ogb.nodeproppred import PygNodePropPredDataset
-from ogb.graphproppred import GraphPropPredDataset
-from ogb.nodeproppred import NodePropPredDataset
+# from ogb.graphproppred import GraphPropPredDataset
+# from ogb.nodeproppred import NodePropPredDataset
 
 
 # from huggingface_hub import login
 # login("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")
 
 
-MODEL_NAME = "beomi/llama-2-ko-7b"  # "beomi/llama-2-ko-7b"  # "7B"  # "huggyllama/llama-7b"
-K = 5
+MODEL_NAME = "7B"  # "beomi/llama-2-ko-7b"  # "7B"  # "huggyllama/llama-7b"
+K = 5   
 NUM_LABELS = 40
 MAX_LENGTH = 80
-BATCH_SIZE = 64
-EPOCHS = 30
-GRADIENT_ACCUMULATION_STEPS = 64
-LEARNING_RATE = 5e-3
+BATCH_SIZE = 4
+EPOCHS = 10
+GRADIENT_ACCUMULATION_STEPS = 2
+LEARNING_RATE = 3e-4
 LoRA_R = 64
 LoRA_ALPHA = 16
 
@@ -63,7 +63,7 @@ class ScriptArguments:
     peft_lora_alpha: Optional[int] = field(default=LoRA_ALPHA, metadata={"help": "the alpha parameter of the LoRA adapters"})
     
     # Setting for Save
-    save_steps: Optional[int] = field(default=10, metadata={"help": "Number of updates steps before two checkpoint saves"})
+    save_steps: Optional[int] = field(default=-1, metadata={"help": "Number of updates steps before two checkpoint saves"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     output_dir: Optional[str] = field(default="Output", metadata={"help": "the output directory"})
     
@@ -77,7 +77,7 @@ class ScriptArguments:
 
     # Maybe use for CausalLM
     # dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})  
-    # seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"}) 
+    seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"}) 
 
 
 class CustomDataset(Dataset2):
@@ -85,7 +85,7 @@ class CustomDataset(Dataset2):
         self.embeds = embeds.squeeze(1).to(torch.bfloat16)
         self.labels = torch.tensor(labels).unsqueeze(1)
         self.attention_mask = create_attention_mask(self.embeds)
-
+        
     def __len__(self):
         return len(self.embeds)
 
@@ -111,15 +111,15 @@ class CustomTrainer(Trainer):
         outputs = model(inputs_embeds=inputs_embeds)
 
         logits = outputs.get("logits")
-
+        # print(f"\n===\n logits.shape={logits.shape}; labels.shape={labels.shape}\n###\n {logits} \n ### {labels} ===\n")
         # 确保 logits 形状正确
         if logits.shape[-1] != self.model.config.num_labels:
             raise ValueError(f"Logits 的最后一个维度应为 {self.model.config.num_labels}, 但得到的是 {logits.shape[-1]}")
 
         # 计算损失
         loss_fct = CrossEntropyLoss()
+        # loss = loss_fct(logits, labels)
         loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels)
-
         return (loss, outputs) if return_outputs else loss
 
 
@@ -149,19 +149,31 @@ def expand_embedding(embeddings):
 #     """将张量填充到指定的大小。"""
 #     pad = (0, 0) * (tensor.dim() - dim - 1) + (0, pad_size - tensor.size(dim))
 #     return torch.nn.functional.pad(tensor, pad, 'constant', 0)
-def pad_tensor(tensor, pad_size, dim):
+# def pad_tensor(tensor, pad_size, dim):
+#     """将张量填充到指定的大小。"""
+#     pad = (0, 0) * (tensor.dim() - dim - 1) + (0, pad_size - tensor.size(dim))
+#     return torch.nn.functional.pad(tensor, pad, 'constant', 0)
+# def pad_tensor(tensor, pad_size, dim, pad_value):
+#     """将张量在指定维度的最左侧填充到指定的大小，并使用指定的填充值。"""
+#     # 确保填充尺寸不会是负数
+#     padding = max(pad_size - tensor.size(dim), 0)
+    
+#     # 生成一个新的pad元组，用于在左侧填充
+#     pad = (0, 0) * (tensor.dim() - dim - 1) + (padding, 0)
+    
+#     return torch.nn.functional.pad(tensor, pad, 'constant', pad_value)
+def pad_tensor(tensor, pad_size, dim, pad_value=0):
     """将张量填充到指定的大小。"""
     pad = (0, 0) * (tensor.dim() - dim - 1) + (0, pad_size - tensor.size(dim))
     return torch.nn.functional.pad(tensor, pad, 'constant', 0)
-
 
 def construct_instruction(node_idx, node_feat, K, K_idx, K_feat, node_target, tokenizer, extract_embedding):
     query_part_1 = f"Central node [{node_idx}] is featured with text feature"
     query_part_2 = f"are the top-{K} similar nodes {K_idx}'s features within two-hops."
     # query_part_3 = f"Which category should central node [{node_idx}]  be classified as?\n"
 
-    embed_1 = embed_extract(tokenizer, extract_embedding, query_part_1).cpu()
-    embed_2 = embed_extract(tokenizer, extract_embedding, query_part_2).cpu()
+    embed_1 = embed_extract(tokenizer, extract_embedding, query_part_1)
+    embed_2 = embed_extract(tokenizer, extract_embedding, query_part_2)
     # embed_3 = embed_extract(tokenizer, extract_embedding, query_part_3)
 
     node_feat = expand_embedding(node_feat).view(1, 1, -1)
@@ -175,8 +187,7 @@ def construct_instruction(node_idx, node_feat, K, K_idx, K_feat, node_target, to
     # instrcution_embedding = torch.cat((embed_1, node_feat, K_feat, embed_2, embed_3), dim=1)
 
     if instrcution_embedding.size(1) < MAX_LENGTH:
-        instrcution_embedding = pad_tensor(instrcution_embedding, MAX_LENGTH, 1)
-        print(instrcution_embedding)
+        instrcution_embedding = pad_tensor(instrcution_embedding, MAX_LENGTH, dim=1, pad_value=0)
 
     answer = int(node_target)
 
@@ -226,17 +237,17 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
         top_k_neighbors = json.load(file)
 
     # 加载ogbn-arxiv数据集
-    dataset = NodePropPredDataset(name='ogbn-arxiv')
-    data,y = dataset[0]
+    dataset = PygNodePropPredDataset(name='ogbn-arxiv')
+    data = dataset[0]
     split_idx = dataset.get_idx_split()
 
     # 根据输入参数选择索引
     if dataset_type == 'train':
-        idxs = split_idx['train']
+        idxs = split_idx['train'][:10000]
     elif dataset_type == 'valid':
-        idxs = split_idx['valid']
+        idxs = split_idx['valid'][:2000]
     elif dataset_type == 'test':
-        idxs = split_idx['test']
+        idxs = split_idx['test'][:2000]
     else:
         raise ValueError("Invalid dataset type. Choose 'train', 'valid', or 'test'.")
 
@@ -248,7 +259,7 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
         # 使用位置索引获取top_k_neighbors
         k_idx = top_k_neighbors[str(position)]   #top_k_neighbors[str(node_idx)]  # 使用位置索引
         k_feat = x_embs[k_idx]  # 邻居特征
-        node_target = y[idx]  # 节点目标/标签
+        node_target = data.y[idx]  # 节点目标/标签
 
         data_list.append({
             'node_idx': node_idx,
@@ -265,7 +276,10 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
+    print("\n======")
+    print(labels.squeeze())
     print(predictions)
+    print("======\n")
     return {"accuracy": accuracy_score(labels, predictions)}
 
 
@@ -300,7 +314,7 @@ def main():
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
         train_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                  for node in tqdm(train_data, desc='Processing Train Instructions')]
+                  for node in tqdm(train_data[:1000], desc='Processing Train Instructions')]
         torch.save(train_instructions, "Instruction/train_instructions.pt")
 
     try:
@@ -309,7 +323,7 @@ def main():
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
         valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                  for node in tqdm(valid_data, desc='Processing Validation Instructions')]
+                  for node in tqdm(valid_data[:200], desc='Processing Validation Instructions')]
         torch.save(valid_instructions, "Instruction/valid_instructions.pt")
 
 
@@ -321,10 +335,10 @@ def main():
 
 
     # 转换为 torch.tensor 并确保数据在 CPU 上
-    train_embeds = torch.stack(train_embeds).cpu()
-    train_labels = torch.tensor(train_labels, dtype=torch.long).cpu()
-    valid_embeds = torch.stack(valid_embeds).cpu()
-    valid_labels = torch.tensor(valid_labels, dtype=torch.long).cpu()
+    train_embeds = torch.stack(train_embeds)
+    train_labels = torch.tensor(train_labels, dtype=torch.long)
+    valid_embeds = torch.stack(valid_embeds)
+    valid_labels = torch.tensor(valid_labels, dtype=torch.long)
 
     # 创建 MyDataset 实例
     train_dataset = CustomDataset(train_embeds, train_labels)
@@ -354,15 +368,15 @@ def main():
             lora_alpha=script_args.peft_lora_alpha,
             # target_modules=['q_proj','k_proj','v_proj','o_proj','lm_head'],  # Select LoRA tuning modules.
             bias="none",
-            task_type= "SEQ_CLS",  #"CAUSAL_LM", FEATURE_EXTRACTION, QUESTION_ANS, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS"
+            task_type= "CAUSAL_LM",  #"CAUSAL_LM", FEATURE_EXTRACTION, QUESTION_ANS, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS"
         )
     else:
         peft_config = None
 
     llama2_model.add_adapter(peft_config)
 
-    # trainer = CustomTrainer(
-    trainer = Trainer(
+    trainer = CustomTrainer(
+    # trainer = Trainer(
         model=llama2_model,
         args=training_args,
         train_dataset=train_dataset,
@@ -376,6 +390,6 @@ def main():
     metrics=trainer.evaluate()
     print(metrics)
 
+
 if __name__ == "__main__":
     main()
-
