@@ -22,20 +22,20 @@ from peft import LoraConfig
 from dataclasses import dataclass, field
 # from datasets import load_dataset, Dataset, DatasetDict
 
-from ogb.nodeproppred import PygNodePropPredDataset
+# from ogb.nodeproppred import PygNodePropPredDataset
 # from ogb.graphproppred import GraphPropPredDataset
-# from ogb.nodeproppred import NodePropPredDataset
+from ogb.nodeproppred import NodePropPredDataset
 
 
 # from huggingface_hub import login
 # login("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")
 
 
-MODEL_NAME = "7B"  # "beomi/llama-2-ko-7b"  # "7B"  # "huggyllama/llama-7b"
+MODEL_NAME = "huggyllama/llama-7b"  # "beomi/llama-2-ko-7b"  # "7B"  # "huggyllama/llama-7b"
 K = 5   
 NUM_LABELS = 40
 MAX_LENGTH = 80
-BATCH_SIZE = 4
+BATCH_SIZE = 32
 EPOCHS = 10
 GRADIENT_ACCUMULATION_STEPS = 2
 LEARNING_RATE = 3e-4
@@ -63,7 +63,7 @@ class ScriptArguments:
     peft_lora_alpha: Optional[int] = field(default=LoRA_ALPHA, metadata={"help": "the alpha parameter of the LoRA adapters"})
     
     # Setting for Save
-    save_steps: Optional[int] = field(default=-1, metadata={"help": "Number of updates steps before two checkpoint saves"})
+    save_steps: Optional[int] = field(default=100, metadata={"help": "Number of updates steps before two checkpoint saves"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     output_dir: Optional[str] = field(default="Output", metadata={"help": "the output directory"})
     
@@ -82,9 +82,9 @@ class ScriptArguments:
 
 class CustomDataset(Dataset2):
     def __init__(self, embeds, labels):
-        self.embeds = embeds.squeeze(1).to(torch.bfloat16)
-        self.labels = torch.tensor(labels).unsqueeze(1)
-        self.attention_mask = create_attention_mask(self.embeds)
+        self.embeds = embeds.squeeze(1).to(torch.bfloat16).detach()
+        self.labels = labels.unsqueeze(1).detach()
+        self.attention_mask = create_attention_mask(self.embeds).detach()
         
     def __len__(self):
         return len(self.embeds)
@@ -170,7 +170,6 @@ def pad_tensor(tensor, pad_size, dim, pad_value=0):
 def construct_instruction(node_idx, node_feat, K, K_idx, K_feat, node_target, tokenizer, extract_embedding):
     query_part_1 = f"Central node [{node_idx}] is featured with text feature"
     query_part_2 = f"are the top-{K} similar nodes {K_idx}'s features within two-hops."
-    # query_part_3 = f"Which category should central node [{node_idx}]  be classified as?\n"
 
     embed_1 = embed_extract(tokenizer, extract_embedding, query_part_1)
     embed_2 = embed_extract(tokenizer, extract_embedding, query_part_2)
@@ -237,17 +236,17 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
         top_k_neighbors = json.load(file)
 
     # 加载ogbn-arxiv数据集
-    dataset = PygNodePropPredDataset(name='ogbn-arxiv')
-    data = dataset[0]
+    dataset = NodePropPredDataset(name='ogbn-arxiv')
+    data,y = dataset[0]
     split_idx = dataset.get_idx_split()
 
     # 根据输入参数选择索引
     if dataset_type == 'train':
-        idxs = split_idx['train'][:10000]
+        idxs = split_idx['train']
     elif dataset_type == 'valid':
-        idxs = split_idx['valid'][:2000]
+        idxs = split_idx['valid']
     elif dataset_type == 'test':
-        idxs = split_idx['test'][:2000]
+        idxs = split_idx['test']
     else:
         raise ValueError("Invalid dataset type. Choose 'train', 'valid', or 'test'.")
 
@@ -259,7 +258,7 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
         # 使用位置索引获取top_k_neighbors
         k_idx = top_k_neighbors[str(position)]   #top_k_neighbors[str(node_idx)]  # 使用位置索引
         k_feat = x_embs[k_idx]  # 邻居特征
-        node_target = data.y[idx]  # 节点目标/标签
+        node_target = y[idx]  # 节点目标/标签
 
         data_list.append({
             'node_idx': node_idx,
@@ -296,15 +295,15 @@ def main():
     try:
     # 直接加载 .pt 文件
         train_data=torch.load("Instruction/train_data.pt")
-        valid_data=torch.load("Instruction/valid_data.pt")
+        # valid_data=torch.load("Instruction/valid_data.pt")
         test_data=torch.load("Instruction/test_data.pt")
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
         train_data = load_data(embs_path, train_top_k_neighbors_path, 'train')
-        valid_data = load_data(embs_path, valid_top_k_neighbors_path, 'valid')
+        # valid_data = load_data(embs_path, valid_top_k_neighbors_path, 'valid')
         test_data = load_data(embs_path, test_top_k_neighbors_path, 'test')
         torch.save(train_data, "Instruction/train_data.pt")
-        torch.save(valid_data, "Instruction/valid_data.pt")
+        # torch.save(valid_data, "Instruction/valid_data.pt")
         torch.save(test_data, "Instruction/test_data.pt")
 
 
@@ -314,35 +313,44 @@ def main():
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
         train_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                  for node in tqdm(train_data[:1000], desc='Processing Train Instructions')]
+                  for node in tqdm(train_data, desc='Processing Train Instructions')]
         torch.save(train_instructions, "Instruction/train_instructions.pt")
+
+    # try:
+    # # 直接加载 .pt 文件
+    #     valid_instructions = torch.load("Instruction/valid_instructions.pt")
+    # except FileNotFoundError:
+    # # 如果文件不存在，则处理数据并保存
+    #     valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
+    #               for node in tqdm(valid_data, desc='Processing Validation Instructions')]
+    #     torch.save(valid_instructions, "Instruction/valid_instructions.pt")
+
 
     try:
     # 直接加载 .pt 文件
-        valid_instructions = torch.load("Instruction/valid_instructions.pt")
+        test_instructions = torch.load("Instruction/test_instructions.pt")
     except FileNotFoundError:
     # 如果文件不存在，则处理数据并保存
-        valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                  for node in tqdm(valid_data[:200], desc='Processing Validation Instructions')]
-        torch.save(valid_instructions, "Instruction/valid_instructions.pt")
-
+        test_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
+                  for node in tqdm(test_data, desc='Processing Validation Instructions')]
+        torch.save(test_instructions, "Instruction/test_instructions.pt")
 
     random.shuffle(train_instructions)
-    random.shuffle(valid_instructions)
+    random.shuffle(test_instructions)
 
     train_embeds, train_labels = zip(*train_instructions)
-    valid_embeds, valid_labels = zip(*valid_instructions)
+    test_embeds, test_labels = zip(*test_instructions)
 
 
     # 转换为 torch.tensor 并确保数据在 CPU 上
-    train_embeds = torch.stack(train_embeds)
-    train_labels = torch.tensor(train_labels, dtype=torch.long)
-    valid_embeds = torch.stack(valid_embeds)
-    valid_labels = torch.tensor(valid_labels, dtype=torch.long)
+    train_embeds = torch.stack(train_embeds).detach()
+    train_labels = torch.tensor(train_labels, dtype=torch.long).detach()
+    test_embeds = torch.stack(test_embeds).detach()
+    test_labels = torch.tensor(test_labels, dtype=torch.long).detach()
 
     # 创建 MyDataset 实例
     train_dataset = CustomDataset(train_embeds, train_labels)
-    valid_dataset = CustomDataset(valid_embeds, valid_labels)
+    test_dataset = CustomDataset(test_embeds, test_labels)
 
 
     training_args = TrainingArguments(
@@ -357,6 +365,7 @@ def main():
         save_steps=script_args.save_steps,
         save_total_limit=script_args.save_total_limit,
         evaluation_strategy = "epoch",
+        dataloader_num_workers=50,
         # save_strategy = "epoch",
         # load_best_model_at_end=True,
         # metric_for_best_model="accuracy",
@@ -368,7 +377,7 @@ def main():
             lora_alpha=script_args.peft_lora_alpha,
             # target_modules=['q_proj','k_proj','v_proj','o_proj','lm_head'],  # Select LoRA tuning modules.
             bias="none",
-            task_type= "CAUSAL_LM",  #"CAUSAL_LM", FEATURE_EXTRACTION, QUESTION_ANS, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS"
+            task_type= "SEQ_CLS",  #"CAUSAL_LM", FEATURE_EXTRACTION, QUESTION_ANS, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS"
         )
     else:
         peft_config = None
@@ -380,7 +389,7 @@ def main():
         model=llama2_model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=valid_dataset,
+        eval_dataset=test_dataset,
         compute_metrics=compute_metrics
     )
 
