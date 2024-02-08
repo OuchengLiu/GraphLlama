@@ -1,5 +1,6 @@
 import os
-os.environ['CURL_CA_BUNDLE'] = ''
+# os.environ['CURL_CA_BUNDLE'] = ''
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 import json
 import random
@@ -13,24 +14,33 @@ from torch.utils.data import Dataset as Dataset2
 from torch.nn import CrossEntropyLoss
 
 from transformers import TrainingArguments, Trainer
-from transformers import BitsAndBytesConfig, HfArgumentParser, TrainingArguments
+from transformers import BitsAndBytesConfig, TrainingArguments
 from transformers import AutoTokenizer , AutoConfig, AutoModelForSequenceClassification
 
 from typing import Optional
 from peft import LoraConfig
 from dataclasses import dataclass, field
-from datasets import load_dataset, Dataset, DatasetDict
+# from datasets import load_dataset, Dataset, DatasetDict
 
 from ogb.nodeproppred import PygNodePropPredDataset
+# from ogb.graphproppred import GraphPropPredDataset
+# from ogb.nodeproppred import NodePropPredDataset
 
 
-MODEL_NAME = "beomi/llama-2-ko-7b"  # "7B"
-K = 5
+# from huggingface_hub import login
+# login("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")
+
+
+MODEL_NAME = "7B"  # "beomi/llama-2-ko-7b"  # "7B"  # "huggyllama/llama-7b"
+K = 5   
 NUM_LABELS = 40
 MAX_LENGTH = 80
-BATCH_SIZE = 64
-EPOCHS = 3
-GRADIENT_ACCUMULATION_STEPS = 64
+BATCH_SIZE = 4
+EPOCHS = 10
+GRADIENT_ACCUMULATION_STEPS = 2
+LEARNING_RATE = 3e-4
+LoRA_R = 64
+LoRA_ALPHA = 16
 
 
 @dataclass
@@ -39,7 +49,7 @@ class ScriptArguments:
     model_name: Optional[str] = field(default=MODEL_NAME, metadata={"help": "the model name"})
 
     # Setting for Training
-    learning_rate: Optional[float] = field(default=1.5e-5, metadata={"help": "the learning rate"})  # 1.41e-5
+    learning_rate: Optional[float] = field(default=LEARNING_RATE, metadata={"help": "the learning rate"})  # 1.41e-5
     batch_size: Optional[int] = field(default=BATCH_SIZE, metadata={"help": "the batch size"})
     gradient_accumulation_steps: Optional[int] = field(default=GRADIENT_ACCUMULATION_STEPS, metadata={"help": "the number of gradient accumulation steps"})
     num_train_epochs: Optional[int] = field(default=EPOCHS, metadata={"help": "the number of training epochs"})
@@ -49,14 +59,14 @@ class ScriptArguments:
     load_in_8bit: Optional[bool] = field(default=False, metadata={"help": "load the model in 8 bits precision"})
     load_in_4bit: Optional[bool] = field(default=True, metadata={"help": "load the model in 4 bits precision"})
     use_peft: Optional[bool] = field(default=True, metadata={"help": "Wether to use PEFT or not to train adapters"})
-    peft_lora_r: Optional[int] = field(default=64, metadata={"help": "the r parameter of the LoRA adapters"})
-    peft_lora_alpha: Optional[int] = field(default=16, metadata={"help": "the alpha parameter of the LoRA adapters"})
-
+    peft_lora_r: Optional[int] = field(default=LoRA_R, metadata={"help": "the r parameter of the LoRA adapters"})
+    peft_lora_alpha: Optional[int] = field(default=LoRA_ALPHA, metadata={"help": "the alpha parameter of the LoRA adapters"})
+    
     # Setting for Save
-    save_steps: Optional[int] = field(default=100, metadata={"help": "Number of updates steps before two checkpoint saves"})
+    save_steps: Optional[int] = field(default=-1, metadata={"help": "Number of updates steps before two checkpoint saves"})
     save_total_limit: Optional[int] = field(default=10, metadata={"help": "Limits total number of checkpoints."})
     output_dir: Optional[str] = field(default="Output", metadata={"help": "the output directory"})
-
+    
     # Setting for Log
     log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
     logging_steps: Optional[int] = field(default=1, metadata={"help": "the number of logging steps"})
@@ -66,21 +76,30 @@ class ScriptArguments:
     trust_remote_code: Optional[bool] = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
 
     # Maybe use for CausalLM
-    # dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})
-    # seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"})
+    # dataset_text_field: Optional[str] = field(default="text", metadata={"help": "the text field of the dataset"})  
+    seq_length: Optional[int] = field(default=512, metadata={"help": "Input sequence length"}) 
 
 
 class CustomDataset(Dataset2):
     def __init__(self, embeds, labels):
         self.embeds = embeds.squeeze(1).to(torch.bfloat16)
         self.labels = torch.tensor(labels).unsqueeze(1)
-
+        self.attention_mask = create_attention_mask(self.embeds)
+        
     def __len__(self):
         return len(self.embeds)
 
     def __getitem__(self, idx):
-        item = {"inputs_embeds": self.embeds[idx], "labels": self.labels[idx]}
+        item = {"inputs_embeds": self.embeds[idx], "labels": self.labels[idx], "attention_mask": self.attention_mask[idx]}
         return item
+
+
+def create_attention_mask(embeds):
+    last_feature_zero = embeds[:, :, -1] == 0
+
+    # 将结果转换为整数（0或1）
+    attention_mask = (~last_feature_zero).to(torch.int)
+    return attention_mask
 
 
 class CustomTrainer(Trainer):
@@ -92,15 +111,15 @@ class CustomTrainer(Trainer):
         outputs = model(inputs_embeds=inputs_embeds)
 
         logits = outputs.get("logits")
-
+        # print(f"\n===\n logits.shape={logits.shape}; labels.shape={labels.shape}\n###\n {logits} \n ### {labels} ===\n")
         # 确保 logits 形状正确
         if logits.shape[-1] != self.model.config.num_labels:
             raise ValueError(f"Logits 的最后一个维度应为 {self.model.config.num_labels}, 但得到的是 {logits.shape[-1]}")
 
         # 计算损失
         loss_fct = CrossEntropyLoss()
+        # loss = loss_fct(logits, labels)
         loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels)
-
         return (loss, outputs) if return_outputs else loss
 
 
@@ -126,15 +145,31 @@ def expand_embedding(embeddings):
         raise ValueError("Input embedding must be either 1D or 2D")
 
 
-def pad_tensor(tensor, pad_size, dim):
+# def pad_tensor(tensor, pad_size, dim):
+#     """将张量填充到指定的大小。"""
+#     pad = (0, 0) * (tensor.dim() - dim - 1) + (0, pad_size - tensor.size(dim))
+#     return torch.nn.functional.pad(tensor, pad, 'constant', 0)
+# def pad_tensor(tensor, pad_size, dim):
+#     """将张量填充到指定的大小。"""
+#     pad = (0, 0) * (tensor.dim() - dim - 1) + (0, pad_size - tensor.size(dim))
+#     return torch.nn.functional.pad(tensor, pad, 'constant', 0)
+# def pad_tensor(tensor, pad_size, dim, pad_value):
+#     """将张量在指定维度的最左侧填充到指定的大小，并使用指定的填充值。"""
+#     # 确保填充尺寸不会是负数
+#     padding = max(pad_size - tensor.size(dim), 0)
+    
+#     # 生成一个新的pad元组，用于在左侧填充
+#     pad = (0, 0) * (tensor.dim() - dim - 1) + (padding, 0)
+    
+#     return torch.nn.functional.pad(tensor, pad, 'constant', pad_value)
+def pad_tensor(tensor, pad_size, dim, pad_value=0):
     """将张量填充到指定的大小。"""
     pad = (0, 0) * (tensor.dim() - dim - 1) + (0, pad_size - tensor.size(dim))
     return torch.nn.functional.pad(tensor, pad, 'constant', 0)
 
-
 def construct_instruction(node_idx, node_feat, K, K_idx, K_feat, node_target, tokenizer, extract_embedding):
-    query_part_1 = f"\n Central node [{node_idx}] is featured with text feature"
-    query_part_2 = f"are the top-{K} similar nodes [{K_idx}]'s features within two-hops.\n"
+    query_part_1 = f"Central node [{node_idx}] is featured with text feature"
+    query_part_2 = f"are the top-{K} similar nodes {K_idx}'s features within two-hops."
     # query_part_3 = f"Which category should central node [{node_idx}]  be classified as?\n"
 
     embed_1 = embed_extract(tokenizer, extract_embedding, query_part_1)
@@ -152,10 +187,11 @@ def construct_instruction(node_idx, node_feat, K, K_idx, K_feat, node_target, to
     # instrcution_embedding = torch.cat((embed_1, node_feat, K_feat, embed_2, embed_3), dim=1)
 
     if instrcution_embedding.size(1) < MAX_LENGTH:
-        instrcution_embedding = pad_tensor(K_feat, MAX_LENGTH, 1)
+        instrcution_embedding = pad_tensor(instrcution_embedding, MAX_LENGTH, dim=1, pad_value=0)
+
     answer = int(node_target)
 
-    return instrcution_embedding, answer
+    return instrcution_embedding.cpu(), answer
 
 
 def load_model():
@@ -207,11 +243,11 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
 
     # 根据输入参数选择索引
     if dataset_type == 'train':
-        idxs = split_idx['train']
+        idxs = split_idx['train'][:10000]
     elif dataset_type == 'valid':
-        idxs = split_idx['valid']
+        idxs = split_idx['valid'][:2000]
     elif dataset_type == 'test':
-        idxs = split_idx['test']
+        idxs = split_idx['test'][:2000]
     else:
         raise ValueError("Invalid dataset type. Choose 'train', 'valid', or 'test'.")
 
@@ -220,7 +256,6 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
     for position, idx in tqdm(enumerate(idxs), desc=f"Processing {dataset_type} Data"):
         node_idx = idx.item()  # 节点索引
         node_feat = x_embs[node_idx]  # 节点特征
-
         # 使用位置索引获取top_k_neighbors
         k_idx = top_k_neighbors[str(position)]   #top_k_neighbors[str(node_idx)]  # 使用位置索引
         k_feat = x_embs[k_idx]  # 邻居特征
@@ -234,13 +269,17 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
             'label': node_target
         })
 
+
     return data_list
 
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
+    print("\n======")
+    print(labels.squeeze())
     print(predictions)
+    print("======\n")
     return {"accuracy": accuracy_score(labels, predictions)}
 
 
@@ -252,26 +291,41 @@ def main():
     embs_path = 'Data/x_embs.pt'
     train_top_k_neighbors_path = 'Data/train_top_k_neighbors.json'
     valid_top_k_neighbors_path = 'Data/valid_top_k_neighbors.json'
+    test_top_k_neighbors_path='Data/test_top_k_neighbors.json'
 
-    train_data = load_data(embs_path, train_top_k_neighbors_path, 'train')
-    valid_data = load_data(embs_path, valid_top_k_neighbors_path, 'valid')
-    #test_data = load_data(embs_path, 'test_top_k_neighbors.pt', 'test')
+    try:
+    # 直接加载 .pt 文件
+        train_data=torch.load("Instruction/train_data.pt")
+        valid_data=torch.load("Instruction/valid_data.pt")
+        test_data=torch.load("Instruction/test_data.pt")
+    except FileNotFoundError:
+    # 如果文件不存在，则处理数据并保存
+        train_data = load_data(embs_path, train_top_k_neighbors_path, 'train')
+        valid_data = load_data(embs_path, valid_top_k_neighbors_path, 'valid')
+        test_data = load_data(embs_path, test_top_k_neighbors_path, 'test')
+        torch.save(train_data, "Instruction/train_data.pt")
+        torch.save(valid_data, "Instruction/valid_data.pt")
+        torch.save(test_data, "Instruction/test_data.pt")
 
-    train_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                      for node in tqdm(train_data, desc='Processing Train Instructions')]
-    # 存储为 .pt 文件
-    # torch.save(train_instructions, 'Instruction/train_instructions.pt')
-    # # 存储为 .json 文件
-    # with open('Instruction/train_instructions.pt', 'w') as json_file:
-    #     json.dump(train_instructions, json_file, indent=4)
 
-    valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
-                           for node in tqdm(valid_data, desc='Processing Validation Instructions')]
-    # 存储为 .pt 文件
-    # torch.save(valid_instructions, 'Instruction/train_instructions.pt')
-    # # 存储为 .json 文件
-    # with open('Instruction/train_instructions.pt', 'w') as json_file:
-    #     json.dump(train_instructions, json_file, indent=4)
+    try:
+    # 直接加载 .pt 文件
+        train_instructions = torch.load("Instruction/train_instructions.pt")
+    except FileNotFoundError:
+    # 如果文件不存在，则处理数据并保存
+        train_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
+                  for node in tqdm(train_data[:1000], desc='Processing Train Instructions')]
+        torch.save(train_instructions, "Instruction/train_instructions.pt")
+
+    try:
+    # 直接加载 .pt 文件
+        valid_instructions = torch.load("Instruction/valid_instructions.pt")
+    except FileNotFoundError:
+    # 如果文件不存在，则处理数据并保存
+        valid_instructions = [construct_instruction(node['node_idx'], node['node_feat'], K, node['K_idx'], node['K_feat'], node['label'], llama2_tokenizer, extract_embedding)
+                  for node in tqdm(valid_data[:200], desc='Processing Validation Instructions')]
+        torch.save(valid_instructions, "Instruction/valid_instructions.pt")
+
 
     random.shuffle(train_instructions)
     random.shuffle(valid_instructions)
@@ -279,11 +333,12 @@ def main():
     train_embeds, train_labels = zip(*train_instructions)
     valid_embeds, valid_labels = zip(*valid_instructions)
 
+
     # 转换为 torch.tensor 并确保数据在 CPU 上
-    train_embeds = torch.stack(train_embeds).cpu()
-    train_labels = torch.tensor(train_labels, dtype=torch.long).cpu()
-    valid_embeds = torch.stack(valid_embeds).cpu()
-    valid_labels = torch.tensor(valid_labels, dtype=torch.long).cpu()
+    train_embeds = torch.stack(train_embeds)
+    train_labels = torch.tensor(train_labels, dtype=torch.long)
+    valid_embeds = torch.stack(valid_embeds)
+    valid_labels = torch.tensor(valid_labels, dtype=torch.long)
 
     # 创建 MyDataset 实例
     train_dataset = CustomDataset(train_embeds, train_labels)
@@ -311,8 +366,9 @@ def main():
         peft_config = LoraConfig(
             r=script_args.peft_lora_r,
             lora_alpha=script_args.peft_lora_alpha,
+            # target_modules=['q_proj','k_proj','v_proj','o_proj','lm_head'],  # Select LoRA tuning modules.
             bias="none",
-            task_type="CAUSAL_LM",
+            task_type= "CAUSAL_LM",  #"CAUSAL_LM", FEATURE_EXTRACTION, QUESTION_ANS, SEQ_2_SEQ_LM, SEQ_CLS, TOKEN_CLS"
         )
     else:
         peft_config = None
@@ -320,8 +376,9 @@ def main():
     llama2_model.add_adapter(peft_config)
 
     trainer = CustomTrainer(
+    # trainer = Trainer(
         model=llama2_model,
-        args=training_args, # !!!
+        args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
         compute_metrics=compute_metrics
@@ -332,6 +389,7 @@ def main():
 
     metrics=trainer.evaluate()
     print(metrics)
+
 
 if __name__ == "__main__":
     main()
