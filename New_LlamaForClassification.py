@@ -32,6 +32,7 @@ from ogb.nodeproppred import NodePropPredDataset
 
 
 MODEL_NAME = "huggyllama/llama-7b"  # "beomi/llama-2-ko-7b"  # "7B"  # "huggyllama/llama-7b"
+DATASET_NAME = 'ogbn-arxiv'  # 'ogbn-products'
 K = 5   
 NUM_LABELS = 40
 MAX_LENGTH = 80
@@ -236,7 +237,7 @@ def load_data(x_embs_file, top_k_neighbors_file, dataset_type='train'):
         top_k_neighbors = json.load(file)
 
     # 加载ogbn-arxiv数据集
-    dataset = NodePropPredDataset(name='ogbn-arxiv')
+    dataset = NodePropPredDataset(name=DATASET_NAME)
     data,y = dataset[0]
     split_idx = dataset.get_idx_split()
 
