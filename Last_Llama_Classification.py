@@ -282,7 +282,9 @@ def compute_metrics(eval_pred):
 
 def main():
     torch.multiprocessing.set_start_method('spawn')
-    
+    # 使用报错：RuntimeError: unable to open shared memory object </torch_56751_3036041829_897> in read-write mode: Too many open files (24)
+    # 不使用报错：RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use the 'spawn' start method
+
     llama_model, llama_tokenizer, script_args = load_model()
     extract_embedding = llama_model.get_input_embeddings()
 
