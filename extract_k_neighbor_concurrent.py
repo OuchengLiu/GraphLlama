@@ -10,52 +10,53 @@ from tqdm import tqdm
 import concurrent.futures
 
 
-pt_file_path = '/Data/ogbn-products/all-roberta-large-v1/main/cached_embs/x_embs.pt'
-DATASET_NAME = 'ogbn-products'  # 'ogbn-arxiv'
 K = 5
+DATASET_NAME = 'ogbn-products'  # 'ogbn-arxiv'
+pt_file_path = '/Data/{DATASET_NAME}/all-roberta-large-v1/main/cached_embs/x_embs.pt'
+# å¹¶å‘æ•°é‡ï¼šä¾èµ–äºThreadPoolExecutorçš„é»˜è®¤è¡Œä¸ºï¼Œé€šå¸¸æ˜¯å¤„ç†å™¨æ ¸å¿ƒæ•°çš„5å€ã€‚è¿™æ ·åšçš„å¥½å¤„æ˜¯å®ƒå¯ä»¥è‡ªåŠ¨é€‚åº”è¿è¡Œä»£ç çš„æœºå™¨çš„ç¡¬ä»¶èµ„æºï¼Œä½†å¦‚æœéœ€è¦æ›´ç²¾ç»†çš„æ§åˆ¶å¹¶å‘çº§åˆ«ï¼Œå¯ä»¥é€šè¿‡åœ¨åˆ›å»ºThreadPoolExecutoræ—¶æŒ‡å®šmax_workerså‚æ•°æ¥å®ç°ã€‚
 
 
-# ¼ÓÔØÊı¾İ¼¯
+# åŠ è½½æ•°æ®é›†
 def load_dataset(pt_file_path, set):
     embeddings = torch.load(pt_file_path)
-    dataset = PygNodePropPredDataset(name='ogbn-products')
+    dataset = PygNodePropPredDataset(name=DATASET)
     data = dataset[0]
     split_idx = dataset.get_idx_split()
     set_idx = split_idx[set] # ['train'] ['valid'] ['test']
     return embeddings, set_idx, data
 
 
-# ¼ÆËãÓàÏÒÏàËÆ¶È
+# è®¡ç®—ä½™å¼¦ç›¸ä¼¼åº¦
 def compute_similarity(embeddings, node, neighbors):
-    # ¼ÙÉè embeddings ÊÇ¶şÎ¬µÄ£º[num_nodes, num_features]
-    node_embedding = embeddings[node]  # Ìí¼ÓÒ»¸öÎ¬¶ÈÒÔÈ·±£ÊÇ¶şÎ¬µÄ
+    # å‡è®¾ embeddings æ˜¯äºŒç»´çš„ï¼š[num_nodes, num_features]
+    node_embedding = embeddings[node]  # æ·»åŠ ä¸€ä¸ªç»´åº¦ä»¥ç¡®ä¿æ˜¯äºŒç»´çš„
     neighbor_embeddings = embeddings[neighbors]
 
-    # ±ê×¼»¯Ç¶ÈëÏòÁ¿
+    # æ ‡å‡†åŒ–åµŒå…¥å‘é‡
     node_embedding = node_embedding / node_embedding.norm(dim=1, keepdim=True)
     neighbor_embeddings = neighbor_embeddings / neighbor_embeddings.norm(dim=1, keepdim=True)
 
-    # ¼ÆËãÏàËÆ¶ÈµÃ·Ö
+    # è®¡ç®—ç›¸ä¼¼åº¦å¾—åˆ†
     sim_scores = torch.mm(node_embedding, neighbor_embeddings.t()).squeeze(0)
     return sim_scores
 
 
-# »ñÈ¡2-hopÁÚÓò
+# è·å–2-hopé‚»åŸŸ
 def get_2hop_neighbors_parallel(data, node):
-    # ¸Ãº¯Êı´¦Àíµ¥¸ö½Úµã£¬»ñÈ¡Æä2-hopÁÚ¾Ó
+    # è¯¥å‡½æ•°å¤„ç†å•ä¸ªèŠ‚ç‚¹ï¼Œè·å–å…¶2-hopé‚»å±…
     loader = NeighborLoader(data, input_nodes=[node], num_neighbors=[-1, -1], batch_size=1, shuffle=False)
     for batch in loader:
         if batch.edge_index.size(1) == 0:
-            return node, []  # Ã»ÓĞÁÚ¾ÓµÄÇé¿ö
+            return node, []  # æ²¡æœ‰é‚»å±…çš„æƒ…å†µ
         neighbors = batch.n_id.tolist()
         if node in neighbors:
-            neighbors.remove(node)  # ÒÆ³ıµ±Ç°½Úµã×ÔÉí
+            neighbors.remove(node)  # ç§»é™¤å½“å‰èŠ‚ç‚¹è‡ªèº«
         return node, neighbors
 
 
 def find_top_k_neighbors_for_node(embeddings, node, neighbors, k):
     if len(neighbors) == 0:
-        return node, [node] * k  # Èç¹ûÃ»ÓĞÁÚ¾Ó£¬ÓÃ×Ô¼ºÌî³ä
+        return node, [node] * k  # å¦‚æœæ²¡æœ‰é‚»å±…ï¼Œç”¨è‡ªå·±å¡«å……
     sim_scores = compute_similarity(embeddings, node, neighbors)
     top_k_values, top_k_indices = torch.topk(sim_scores, k=min(k, len(neighbors)), largest=True)
     top_k_neighbors = [neighbors[i] for i in top_k_indices.tolist()]
@@ -63,28 +64,28 @@ def find_top_k_neighbors_for_node(embeddings, node, neighbors, k):
 
 
 def find_top_k_neighbors_parallel(embeddings, two_hop_neighbors, k):
-    # ´´½¨Ò»¸ö×ÖµäÀ´´æ´¢Ã¿¸ö½ÚµãµÄtop-kÁÚ¾Ó
+    # åˆ›å»ºä¸€ä¸ªå­—å…¸æ¥å­˜å‚¨æ¯ä¸ªèŠ‚ç‚¹çš„top-ké‚»å±…
     top_k_neighbors = {}
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        # ÎªÃ¿¸ö½ÚµãÌá½»ÕÒµ½top-kÁÚ¾ÓµÄÈÎÎñ
+        # ä¸ºæ¯ä¸ªèŠ‚ç‚¹æäº¤æ‰¾åˆ°top-ké‚»å±…çš„ä»»åŠ¡
         futures = [executor.submit(find_top_k_neighbors_for_node, embeddings, node, neighbors, k) 
                    for node, neighbors in two_hop_neighbors.items()]
         for future in concurrent.futures.as_completed(futures):
             node, top_k_neighbors_for_node = future.result()
             top_k_neighbors[node] = top_k_neighbors_for_node
     
-    # ·µ»Ø°´ÕÕÔ­Ê¼½ÚµãË³Ğò×éÖ¯µÄtop-kÁÚ¾ÓÁĞ±í
+    # è¿”å›æŒ‰ç…§åŸå§‹èŠ‚ç‚¹é¡ºåºç»„ç»‡çš„top-ké‚»å±…åˆ—è¡¨
     ordered_top_k_neighbors = {node: top_k_neighbors[node] for node in two_hop_neighbors}
     return ordered_top_k_neighbors
 
 
-# ×ª»»º¯Êı£º½«×Öµä¼ü×ª»»Îª×Ö·û´®£¬½«Tensor×ª»»ÎªÁĞ±í
+# è½¬æ¢å‡½æ•°ï¼šå°†å­—å…¸é”®è½¬æ¢ä¸ºå­—ç¬¦ä¸²ï¼Œå°†Tensorè½¬æ¢ä¸ºåˆ—è¡¨
 def prepare_for_json(data):
     if isinstance(data, dict):
         new_dict = {}
         for key, value in data.items():
             if isinstance(key, torch.Tensor):
-                # Èç¹û¼üÊÇTensor£¬×ª»»ÎªËüµÄÊıÖµ
+                # å¦‚æœé”®æ˜¯Tensorï¼Œè½¬æ¢ä¸ºå®ƒçš„æ•°å€¼
                 new_key = key.item() if key.numel() == 1 else key.tolist()
             else:
                 new_key = str(key)
@@ -98,7 +99,7 @@ def prepare_for_json(data):
         return data
 
 
-# ±£´æÎªJSONÎÄ¼şµÄº¯Êı
+# ä¿å­˜ä¸ºJSONæ–‡ä»¶çš„å‡½æ•°
 def save_to_json(data, file_name):
     data = prepare_for_json(data)
     print("save begin")
@@ -114,7 +115,7 @@ def extract_parallel(set_name):
     embeddings, set_idx, data = load_dataset(pt_file_path, set_name)
     data.edge_index = to_undirected(data.edge_index)
     
-    # Ê¹ÓÃThreadPoolExecutor²¢ĞĞ»ñÈ¡2-hopÁÚ¾Ó
+    # ä½¿ç”¨ThreadPoolExecutorå¹¶è¡Œè·å–2-hopé‚»å±…
     two_hop_neighbors = {}
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [executor.submit(get_2hop_neighbors_parallel, data, node.item()) for node in set_idx]
@@ -122,18 +123,18 @@ def extract_parallel(set_name):
             node, neighbors = future.result()
             two_hop_neighbors[node] = neighbors
 
-    save_to_json(two_hop_neighbors , f'/Data/ogbn-products/all-roberta-large-v1/main/cached_embs/{set}_neighbors.json')
-    save_to_pt(two_hop_neighbors, f'/Data/ogbn-products/all-roberta-large-v1/main/cached_embs/{set}_neighbors.pt')
+    save_to_json(two_hop_neighbors , f'/Data/{DATASET_NAME}/all-roberta-large-v1/main/cached_embs/{set}_neighbors.json')
+    save_to_pt(two_hop_neighbors, f'/Data/{DATASET_NAME}/all-roberta-large-v1/main/cached_embs/{set}_neighbors.pt')
     
-    # two_hop_neighbors = torch.load(f'/Data/ogbn-products/all-roberta-large-v1/main/cached_embs/{set}_neighbors.pt')
-    k = K  # Top KÏàËÆ½Úµã
+    # two_hop_neighbors = torch.load(f'/Data/{DATASET_NAME}/all-roberta-large-v1/main/cached_embs/{set}_neighbors.pt')
+    k = K  # Top Kç›¸ä¼¼èŠ‚ç‚¹
     top_k_neighbors = find_top_k_neighbors_parallel(embeddings, two_hop_neighbors, k)
-    save_to_json(top_k_neighbors, f'/Data/ogbn-products/all-roberta-large-v1/main/cached_embs/{set}_top_k_neighbors.json')
-    save_to_pt(top_k_neighbors, f'/Data/ogbn-products/all-roberta-large-v1/main/cached_embs/{set}_top_k_neighbors.pt')
+    save_to_json(top_k_neighbors, f'/Data/{DATASET_NAME}/all-roberta-large-v1/main/cached_embs/{set}_top_k_neighbors.json')
+    save_to_pt(top_k_neighbors, f'/Data/{DATASET_NAME}/all-roberta-large-v1/main/cached_embs/{set}_top_k_neighbors.pt')
 
 
 def main():
-    # ¶Ôtrain, valid, test·Ö±ğµ÷ÓÃextract_parallel
+    # å¯¹train, valid, teståˆ†åˆ«è°ƒç”¨extract_parallel
     extract_parallel('train')
     extract_parallel('valid')
     extract_parallel('test')
