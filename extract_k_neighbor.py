@@ -22,7 +22,6 @@ def load_dataset(pt_file_path, set):
     return embeddings, set_idx, data
 
 
-
 def compute_similarity(embeddings, node, neighbors):
 
     node_embedding = embeddings[node] 
@@ -80,7 +79,6 @@ def find_top_k_neighbors(embeddings, two_hop_neighbors, k):
             print(top_k_neighbors[node])
 
     return top_k_neighbors
-
 
 
 def prepare_for_json(data):
